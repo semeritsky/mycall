@@ -9,13 +9,23 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
-  flutter_webrtc: ^0.12.5        # WebRTC: камера, микрофон, P2P-медиа
+  # 0.12.x собирается против Android SDK 31 и падает на checkAarMetadata:
+  # androidx требует минимум 34. Держим 1.x — там compileSdk современный.
+  flutter_webrtc: ^1.6.0         # WebRTC: камера, микрофон, P2P-медиа
   shared_preferences: ^2.3.2     # хранение адреса сервера и токена
   wakelock_plus: ^1.2.8          # не гасить экран во время звонка
-  permission_handler: ^11.3.1
+  permission_handler: ^13.0.0
+
+  # flutter_local_notifications сознательно не подключён: он требует
+  # core library desugaring в Gradle и ломает сборку, а пользы пока нет —
+  # уведомление о входящем звонке появится вместе с foreground service.
+  # Когда до него дойдёт дело, вместе с пакетом добавьте в
+  # android/app/build.gradle.kts:
+  #   compileOptions { isCoreLibraryDesugaringEnabled = true }
+  #   dependencies { coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4") }
 
 dev_dependencies:
-  flutter_lints: ^4.0.0
+  flutter_lints: ^6.0.0
 
 flutter:
   uses-material-design: true
