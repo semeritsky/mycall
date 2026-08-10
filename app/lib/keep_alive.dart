@@ -3,6 +3,9 @@ import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 
 /// Удерживает процесс приложения живым, пока вы «на связи».
 ///
+/// Класс называется LinkKeeper, а не KeepAlive: во Flutter уже есть виджет
+/// KeepAlive, и одноимённый класс ломает компиляцию коллизией имён.
+///
 /// Зачем это нужно. Постоянное WSS-соединение живёт в основном изолате, а
 /// Android через несколько минут после сворачивания выгружает процесс целиком —
 /// сокет рвётся, и звонок до вас не доходит. Единственный законный способ
@@ -13,8 +16,8 @@ import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 ///
 /// Все вызовы плагина обёрнуты в try/catch: если сервис не запустится, лучше
 /// работать без него, чем уронить приложение на старте.
-class KeepAlive {
-  KeepAlive._();
+class LinkKeeper {
+  LinkKeeper._();
 
   static const _channelId = 'mycall_link';
   static bool _initialized = false;
@@ -35,7 +38,7 @@ class KeepAlive {
         await FlutterForegroundTask.requestIgnoreBatteryOptimization();
       }
     } catch (e) {
-      debugPrint('KeepAlive.requestPermissions: $e');
+      debugPrint('LinkKeeper.requestPermissions: $e');
     }
   }
 
@@ -62,7 +65,7 @@ class KeepAlive {
       );
       _initialized = true;
     } catch (e) {
-      debugPrint('KeepAlive._init: $e');
+      debugPrint('LinkKeeper._init: $e');
     }
   }
 
@@ -77,7 +80,7 @@ class KeepAlive {
       );
       _running = true;
     } catch (e) {
-      debugPrint('KeepAlive.start: $e');
+      debugPrint('LinkKeeper.start: $e');
     }
   }
 
@@ -92,7 +95,7 @@ class KeepAlive {
         notificationText: 'Звонит $peer — нажмите, чтобы ответить',
       );
     } catch (e) {
-      debugPrint('KeepAlive.ringing: $e');
+      debugPrint('LinkKeeper.ringing: $e');
     }
   }
 
@@ -105,7 +108,7 @@ class KeepAlive {
         notificationText: 'Вы вошли как $user',
       );
     } catch (e) {
-      debugPrint('KeepAlive.idle: $e');
+      debugPrint('LinkKeeper.idle: $e');
     }
   }
 
@@ -114,7 +117,7 @@ class KeepAlive {
     try {
       await FlutterForegroundTask.stopService();
     } catch (e) {
-      debugPrint('KeepAlive.stop: $e');
+      debugPrint('LinkKeeper.stop: $e');
     }
     _running = false;
   }
