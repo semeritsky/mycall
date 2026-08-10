@@ -19,6 +19,9 @@ dependencies:
   # поднять compileSdk некуда. В 11.4.0 проверка AAR при compileSdk 36 проходит
   # (видно по логам сборки от 0.12-версии webrtc, где :app дошёл до конца).
   permission_handler: ^11.3.1
+  # Foreground service: не даёт Android выгрузить процесс и порвать соединение.
+  # Без него звонки не доходят, когда приложение свёрнуто.
+  flutter_foreground_task: ^8.17.0
 
   # flutter_local_notifications сознательно не подключён: он требует
   # core library desugaring в Gradle и ломает сборку, а пользы пока нет —
