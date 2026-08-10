@@ -50,7 +50,24 @@ jobs:
 
       - name: Сборка release
         working-directory: app
-        run: flutter build apk --release
+        # --build-number делает versionCode равным номеру запуска, то есть
+        # каждая следующая сборка получает больший номер. Без этого все APK
+        # имеют versionCode 1, и Android не считает новый файл обновлением.
+        run: flutter build apk --release --build-number=${{ github.run_number }}
+
+      - name: Отпечаток подписи
+        # Диагностика обновлений. Если этот отпечаток меняется от сборки к
+        # сборке, значит секрет DEBUG_KEYSTORE_BASE64 не применяется и APK
+        # подписан случайным ключом — обновление поверх установить нельзя.
+        run: |
+          APK=app/build/app/outputs/flutter-apk/app-release.apk
+          SIGNER=$(ls -d "$ANDROID_HOME"/build-tools/*/apksigner 2>/dev/null | sort -V | tail -1)
+          if [ -n "$SIGNER" ]; then
+            echo "::notice::$("$SIGNER" verify --print-certs "$APK" | grep -i 'SHA-256 digest' | head -1)"
+            "$SIGNER" verify --print-certs "$APK" | grep -i 'digest'
+          else
+            echo "apksigner не найден, пропускаю"
+          fi
 
       - name: Выложить APK
         uses: actions/upload-artifact@v4
