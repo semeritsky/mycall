@@ -14,7 +14,11 @@ dependencies:
   flutter_webrtc: ^1.6.0         # WebRTC: камера, микрофон, P2P-медиа
   shared_preferences: ^2.3.2     # хранение адреса сервера и токена
   wakelock_plus: ^1.2.8          # не гасить экран во время звонка
-  permission_handler: ^13.0.0
+  # Держим 11.x осознанно. Версия 13 требует compileSdk 37, а Android Gradle
+  # Plugin 9.0.1, который идёт с текущим Flutter, дальше 36 не поддерживает —
+  # поднять compileSdk некуда. В 11.4.0 проверка AAR при compileSdk 36 проходит
+  # (видно по логам сборки от 0.12-версии webrtc, где :app дошёл до конца).
+  permission_handler: ^11.3.1
 
   # flutter_local_notifications сознательно не подключён: он требует
   # core library desugaring в Gradle и ломает сборку, а пользы пока нет —
