@@ -30,6 +30,7 @@ class CallScreen extends StatefulWidget {
 class _CallScreenState extends State<CallScreen> {
   late final CallSession _session;
   Timer? _ticker;
+  Timer? _timeout;
   Duration _elapsed = Duration.zero;
   bool _ready = false;
   String? _fatal;
@@ -57,6 +58,18 @@ class _CallScreenState extends State<CallScreen> {
         _session.stage = CallStage.ringing;
       }
       if (mounted) setState(() => _ready = true);
+
+      // Без этого зависший звонок висит «Соединяем…» бесконечно и непонятно,
+      // ждать ли дальше. 45 секунд — заведомо больше, чем нужно ICE.
+      _timeout = Timer(const Duration(seconds: 45), () {
+        if (!mounted || _session.stage == CallStage.active) return;
+        setState(() => _fatal =
+            'Соединение не установилось за 45 секунд.\n'
+            'Состояние ICE: ${_session.iceState ?? "неизвестно"}\n\n'
+            'Если здесь «failed» — не работает TURN-релей: '
+            'проверьте порты 3478 и 5349 и диапазон 49160–49300/udp, '
+            'в том числе в панели хостера.');
+      });
     } catch (e) {
       if (mounted) setState(() => _fatal = 'Не удалось включить камеру или микрофон: $e');
     }
@@ -64,6 +77,10 @@ class _CallScreenState extends State<CallScreen> {
 
   void _onSessionChange() {
     if (!mounted) return;
+    if (_session.stage == CallStage.active) {
+      _timeout?.cancel();
+      _timeout = null;
+    }
     if (_session.stage == CallStage.active && _ticker == null) {
       _ticker = Timer.periodic(const Duration(seconds: 1), (_) {
         final since = _session.connectedAt;
@@ -80,6 +97,8 @@ class _CallScreenState extends State<CallScreen> {
   Future<void> _leave() async {
     _ticker?.cancel();
     _ticker = null;
+    _timeout?.cancel();
+    _timeout = null;
     await WakelockPlus.disable();
     if (mounted) Navigator.of(context).maybePop();
   }
@@ -87,6 +106,7 @@ class _CallScreenState extends State<CallScreen> {
   @override
   void dispose() {
     _ticker?.cancel();
+    _timeout?.cancel();
     _session.removeListener(_onSessionChange);
     _session.hangUp(notifyPeer: _session.stage != CallStage.ended);
     WakelockPlus.disable();
@@ -191,6 +211,17 @@ class _CallScreenState extends State<CallScreen> {
                       fontFeatures: const [FontFeature.tabularFigures()],
                     ),
                   ),
+                  // Пока соединение не установлено, показываем состояние ICE —
+                  // это единственный способ понять причину без отладчика.
+                  if (_session.stage != CallStage.active &&
+                      _session.iceState != null)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 2),
+                      child: Text(
+                        'ICE: ${_session.iceState}',
+                        style: const TextStyle(color: muted, fontSize: 11),
+                      ),
+                    ),
                 ],
               ),
             ),

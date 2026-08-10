@@ -55,6 +55,30 @@ class Signaling extends ChangeNotifier {
   final _signals = StreamController<Map<String, dynamic>>.broadcast();
   Stream<Map<String, dynamic>> get signals => _signals.stream;
 
+  /// Буфер сигналов по собеседнику.
+  ///
+  /// Зачем: [CallSession] подписывается на [signals] только после того, как
+  /// получит камеру с микрофоном и создаст peer connection — это сотни
+  /// миллисекунд, а на первом звонке ещё и диалог разрешений. Offer от
+  /// звонящего успевает прийти раньше, а broadcast-поток события до подписки
+  /// не хранит. Без буфера offer теряется, и звонок навсегда зависает
+  /// на «Соединяем…».
+  final Map<String, List<Map<String, dynamic>>> _buffered = {};
+
+  void _bufferAndEmit(Map<String, dynamic> msg) {
+    final from = msg['from'] as String?;
+    if (from != null) {
+      final list = _buffered.putIfAbsent(from, () => []);
+      list.add(msg);
+      if (list.length > 200) list.removeAt(0); // защита от переполнения
+    }
+    _signals.add(msg);
+  }
+
+  /// Забрать и очистить накопленные сигналы от собеседника.
+  List<Map<String, dynamic>> takeBufferedSignals(String peer) =>
+      _buffered.remove(peer) ?? const [];
+
   /// Входящий звонок: сюда прилетает id звонящего.
   final _incoming = StreamController<Map<String, dynamic>>.broadcast();
   Stream<Map<String, dynamic>> get incomingCalls => _incoming.stream;
@@ -160,6 +184,8 @@ class Signaling extends ChangeNotifier {
         break;
 
       case 'call':
+        // Новый звонок — старые сигналы от этого человека больше не нужны.
+        _buffered.remove(msg['from']);
         _incoming.add(msg);
         break;
 
@@ -167,7 +193,7 @@ class Signaling extends ChangeNotifier {
       case 'answer':
       case 'hangup':
       case 'decline':
-        _signals.add(msg);
+        _bufferAndEmit(msg);
         break;
 
       case 'peer-offline':
@@ -181,7 +207,7 @@ class Signaling extends ChangeNotifier {
         break;
     }
     // ice-кандидаты приходят часто; отдаём без лишних notifyListeners
-    if (msg['type'] == 'ice' && msg.containsKey('candidate')) _signals.add(msg);
+    if (msg['type'] == 'ice' && msg.containsKey('candidate')) _bufferAndEmit(msg);
   }
 
   Map<String, dynamic> _buildIceConfig(Map<String, dynamic> ice) {

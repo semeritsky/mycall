@@ -33,6 +33,8 @@ class CallSession extends ChangeNotifier {
   StreamSubscription<Map<String, dynamic>>? _sub;
   final List<RTCIceCandidate> _pendingCandidates = [];
   RTCSessionDescription? _heldOffer;
+  bool _closed = false;
+  bool _accepted = false;
 
   CallStage stage = CallStage.dialing;
   String? statusText;
@@ -40,13 +42,16 @@ class CallSession extends ChangeNotifier {
   bool cameraEnabled = true;
   bool speakerOn = true;
   bool frontCamera = true;
+
+  /// Состояние сбора ICE-кандидатов. Показывается на экране звонка, пока
+  /// соединение не установлено: по нему видно, дело в TURN или в сигналинге.
+  String? iceState;
   DateTime? connectedAt;
 
   /// Общая подготовка: рендереры, локальное медиа, peer connection.
   Future<void> prepare() async {
     await localRenderer.initialize();
     await remoteRenderer.initialize();
-    _sub = signaling.signals.listen(_onSignal);
 
     _localStream = await navigator.mediaDevices.getUserMedia({
       'audio': {
@@ -90,6 +95,13 @@ class CallSession extends ChangeNotifier {
       }
     };
 
+    _pc!.onIceConnectionState = (s) {
+      iceState = s.name
+          .replaceFirst('RTCIceConnectionState', '')
+          .toLowerCase();
+      notifyListeners();
+    };
+
     _pc!.onConnectionState = (s) {
       switch (s) {
         case RTCPeerConnectionState.RTCPeerConnectionStateConnected:
@@ -114,6 +126,13 @@ class CallSession extends ChangeNotifier {
     };
 
     await Helper.setSpeakerphoneOn(true);
+
+    // Подписываемся только теперь, когда _pc готов принимать SDP и кандидатов,
+    // и сразу разбираем то, что успело прийти пока включалась камера.
+    _sub = signaling.signals.listen(_onSignal);
+    for (final buffered in signaling.takeBufferedSignals(peer)) {
+      await _onSignal(buffered);
+    }
   }
 
   /// Исходящий звонок: звоним и сразу отправляем offer.
@@ -137,6 +156,7 @@ class CallSession extends ChangeNotifier {
 
   /// Входящий звонок: принимаем — отвечаем на уже полученный offer.
   Future<void> accept() async {
+    _accepted = true;
     stage = CallStage.connecting;
     notifyListeners();
     final offer = _heldOffer;
@@ -144,6 +164,7 @@ class CallSession extends ChangeNotifier {
       _heldOffer = null;
       await _applyRemoteOffer(offer);
     }
+    // Если offer ещё не пришёл — его применит _onSignal, увидев _accepted.
   }
 
   void decline() {
@@ -153,10 +174,15 @@ class CallSession extends ChangeNotifier {
   }
 
   Future<void> _applyRemoteOffer(RTCSessionDescription offer) async {
-    await _pc!.setRemoteDescription(offer);
+    final pc = _pc;
+    if (pc == null) {
+      _heldOffer = offer; // ещё не готовы — применим, когда появится _pc
+      return;
+    }
+    await pc.setRemoteDescription(offer);
     await _drainCandidates();
-    final answer = await _pc!.createAnswer();
-    await _pc!.setLocalDescription(answer);
+    final answer = await pc.createAnswer();
+    await pc.setLocalDescription(answer);
     signaling.sendSignal({'type': 'answer', 'to': peer, 'sdp': answer.sdp});
   }
 
@@ -165,11 +191,12 @@ class CallSession extends ChangeNotifier {
     switch (msg['type']) {
       case 'offer':
         final offer = RTCSessionDescription(msg['sdp'] as String, 'offer');
-        // Если пользователь ещё не нажал «Ответить», держим offer у себя.
-        if (stage == CallStage.ringing) {
-          _heldOffer = offer;
-        } else {
+        if (isCaller) break; // мы звоним сами — встречный offer игнорируем
+        if (_accepted) {
           await _applyRemoteOffer(offer);
+        } else {
+          // «Ответить» ещё не нажато — держим offer до accept().
+          _heldOffer = offer;
         }
         break;
 
@@ -246,6 +273,12 @@ class CallSession extends ChangeNotifier {
   }
 
   Future<void> hangUp({bool notifyPeer = true}) async {
+    // Завершение приходит с двух сторон: кнопка «Завершить» и dispose экрана.
+    // Без этой защиты рендереры и peer connection освобождаются дважды,
+    // а flutter_webrtc на повторный dispose отвечает исключением.
+    if (_closed) return;
+    _closed = true;
+
     if (notifyPeer && stage != CallStage.ended) {
       signaling.sendSignal({'type': 'hangup', 'to': peer});
     }
