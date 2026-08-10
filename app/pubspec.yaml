@@ -11,7 +11,6 @@ dependencies:
     sdk: flutter
   flutter_webrtc: ^0.12.5        # WebRTC: камера, микрофон, P2P-медиа
   shared_preferences: ^2.3.2     # хранение адреса сервера и токена
-  flutter_local_notifications: ^17.2.3  # уведомление о входящем звонке
   wakelock_plus: ^1.2.8          # не гасить экран во время звонка
   permission_handler: ^11.3.1
 
