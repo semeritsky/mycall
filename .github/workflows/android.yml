@@ -1,47 +1,61 @@
-name: Создать ключ подписи
+name: Собрать APK
 
-# Запускается один раз, вручную. Создаёт ключ, которым будут подписаны все
-# сборки APK, и отдаёт его в артефакте.
-#
-# Зачем отдельный workflow: keytool живёт в Java, а ставить Java только ради
-# одной команды незачем — пусть эту команду выполнит GitHub.
-#
-# Что делать с результатом:
-#   1. Скачать артефакт keystore, внутри два файла.
-#   2. Содержимое debug.keystore.base64 положить в Settings → Secrets and
-#      variables → Actions → New repository secret с именем DEBUG_KEYSTORE_BASE64.
-#   3. Файл debug.keystore сохранить у себя навсегда. Без него не выпустить
-#      обновление, которое встанет поверх установленного приложения.
-#   4. Артефакт удалить со страницы запуска — он лежит в открытом виде.
-
+# Запуск вручную кнопкой Run workflow, а также при любом изменении кода.
 on:
   workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'app/**'
+      - 'tools/**'
+      - '.github/workflows/android.yml'
 
 jobs:
-  keystore:
+  apk:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
+
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-java@v4
+      - name: Java 17
+        uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
 
-      - name: Сгенерировать ключ
-        run: bash tools/make-keystore.sh debug.keystore
+      - name: Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
 
-      - name: Выложить артефакт
+      # Без этого шага каждая сборка подписывается новым случайным ключом
+      # и обновление не встанет поверх уже установленного приложения.
+      - name: Постоянный ключ подписи
+        env:
+          KEYSTORE_B64: ${{ secrets.DEBUG_KEYSTORE_BASE64 }}
+        run: |
+          if [ -n "$KEYSTORE_B64" ]; then
+            mkdir -p ~/.android
+            echo "$KEYSTORE_B64" | base64 -d > ~/.android/debug.keystore
+            echo "Использую свой ключ подписи."
+          else
+            echo "::warning::Секрет DEBUG_KEYSTORE_BASE64 не задан — APK подписан"
+            echo "::warning::случайным ключом, обновления поверх не установятся."
+          fi
+
+      - name: Достроить проект
+        run: bash tools/prepare.sh
+
+      - name: Сборка release
+        working-directory: app
+        run: flutter build apk --release
+
+      - name: Выложить APK
         uses: actions/upload-artifact@v4
         with:
-          name: keystore
-          path: |
-            debug.keystore
-            debug.keystore.base64
-          retention-days: 1
+          name: mycall-apk
+          path: app/build/app/outputs/flutter-apk/app-release.apk
+          retention-days: 30
           if-no-files-found: error
-
-      - name: Напоминание
-        run: |
-          echo "::warning::Скачайте артефакт, положите base64 в секрет"
-          echo "::warning::DEBUG_KEYSTORE_BASE64, затем удалите артефакт."
