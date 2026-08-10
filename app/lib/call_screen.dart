@@ -31,7 +31,9 @@ class _CallScreenState extends State<CallScreen> {
   late final CallSession _session;
   Timer? _ticker;
   Timer? _timeout;
+  Timer? _hideTimer;
   Duration _elapsed = Duration.zero;
+  bool _controlsVisible = true;
   bool _ready = false;
   String? _fatal;
 
@@ -80,6 +82,9 @@ class _CallScreenState extends State<CallScreen> {
     if (_session.stage == CallStage.active) {
       _timeout?.cancel();
       _timeout = null;
+      // Первый раз прячем через 4 секунды после соединения, а также
+      // перезапускаем отсчёт после нажатий на кнопки — они идут сюда же.
+      if (_controlsVisible) _scheduleHide();
     }
     if (_session.stage == CallStage.active && _ticker == null) {
       _ticker = Timer.periodic(const Duration(seconds: 1), (_) {
@@ -99,6 +104,7 @@ class _CallScreenState extends State<CallScreen> {
     _ticker = null;
     _timeout?.cancel();
     _timeout = null;
+    _hideTimer?.cancel();
     await WakelockPlus.disable();
     if (mounted) Navigator.of(context).maybePop();
   }
@@ -107,10 +113,34 @@ class _CallScreenState extends State<CallScreen> {
   void dispose() {
     _ticker?.cancel();
     _timeout?.cancel();
+    _hideTimer?.cancel();
     _session.removeListener(_onSessionChange);
     _session.hangUp(notifyPeer: _session.stage != CallStage.ended);
     WakelockPlus.disable();
     super.dispose();
+  }
+
+  /// Кнопки прячем только когда есть на что смотреть: при активном
+  /// видеозвонке. На входящем вызове и в аудиозвонке они нужны постоянно.
+  bool get _canAutoHide =>
+      widget.video && _session.stage == CallStage.active;
+
+  void _scheduleHide() {
+    _hideTimer?.cancel();
+    if (!_canAutoHide) return;
+    _hideTimer = Timer(const Duration(seconds: 4), () {
+      if (mounted) setState(() => _controlsVisible = false);
+    });
+  }
+
+  void _toggleControls() {
+    if (!_canAutoHide) return;
+    setState(() => _controlsVisible = !_controlsVisible);
+    if (_controlsVisible) {
+      _scheduleHide();
+    } else {
+      _hideTimer?.cancel();
+    }
   }
 
   String get _statusLine {
@@ -173,12 +203,25 @@ class _CallScreenState extends State<CallScreen> {
           else
             _Placeholder(peer: widget.peer),
 
+          // Прозрачный слой для нажатий: лежит поверх видео, но НИЖЕ кнопок,
+          // поэтому пока они видны, нажатия достаются им. Когда скрыты —
+          // IgnorePointer их пропускает, и нажатие приходит сюда.
+          Positioned.fill(
+            child: GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onTap: _toggleControls,
+              child: const SizedBox.expand(),
+            ),
+          ),
+
           // Верхняя плашка: кто и в каком состоянии.
           Positioned(
             top: 0,
             left: 0,
             right: 0,
-            child: Container(
+            child: _Fading(
+              visible: _controlsVisible,
+              child: Container(
               padding: EdgeInsets.only(
                 top: MediaQuery.of(context).viewPadding.top + 16,
                 left: 24,
@@ -224,6 +267,7 @@ class _CallScreenState extends State<CallScreen> {
                     ),
                 ],
               ),
+              ),
             ),
           ),
 
@@ -252,7 +296,9 @@ class _CallScreenState extends State<CallScreen> {
             left: 0,
             right: 0,
             bottom: 0,
-            child: Container(
+            child: _Fading(
+              visible: _controlsVisible,
+              child: Container(
               padding: EdgeInsets.only(
                 top: 28,
                 bottom: MediaQuery.of(context).viewPadding.bottom + 28,
@@ -265,6 +311,7 @@ class _CallScreenState extends State<CallScreen> {
                 ),
               ),
               child: incoming ? _incomingControls() : _activeControls(),
+              ),
             ),
           ),
         ],
@@ -345,6 +392,27 @@ class _CallScreenState extends State<CallScreen> {
           },
         ),
       ],
+    );
+  }
+}
+
+/// Плавно убирает панель и перестаёт принимать нажатия, когда она скрыта —
+/// иначе невидимые кнопки продолжали бы перехватывать касания.
+class _Fading extends StatelessWidget {
+  const _Fading({required this.visible, required this.child});
+  final bool visible;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    return IgnorePointer(
+      ignoring: !visible,
+      child: AnimatedOpacity(
+        opacity: visible ? 1 : 0,
+        duration: const Duration(milliseconds: 220),
+        curve: Curves.easeOut,
+        child: child,
+      ),
     );
   }
 }
