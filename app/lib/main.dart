@@ -45,7 +45,7 @@ class _MyCallAppState extends State<MyCallApp> {
     link.connect();
     // Сервис поднимаем сразу: он должен переживать сворачивание приложения
     // независимо от того, установлено ли соединение в эту секунду.
-    KeepAlive.start(user);
+    LinkKeeper.start(user);
   }
 
   Future<void> _saveAndConnect(String host, String user, String token) async {
@@ -57,7 +57,7 @@ class _MyCallAppState extends State<MyCallApp> {
 
   void _signOut() {
     widget.prefs.remove('token');
-    KeepAlive.stop();
+    LinkKeeper.stop();
     _signaling?.dispose();
     setState(() => _signaling = null);
   }
@@ -229,14 +229,14 @@ class _ContactsScreenState extends State<ContactsScreen> {
         .request();
     // Отдельно: снятие ограничений батареи. Без этого производитель телефона
     // прибьёт процесс даже при работающем foreground service.
-    await KeepAlive.requestPermissions();
+    await LinkKeeper.requestPermissions();
   }
 
   Future<void> _onIncoming(Map<String, dynamic> msg) async {
     if (_callInProgress) return; // занято — второй звонок игнорируем
     _callInProgress = true;
     // Если приложение свёрнуто, увидеть звонок можно только в уведомлении.
-    await KeepAlive.ringing(msg['from'] as String);
+    await LinkKeeper.ringing(msg['from'] as String);
     await navigatorKey.currentState?.push(MaterialPageRoute(
       builder: (_) => CallScreen(
         link: widget.link,
@@ -247,7 +247,7 @@ class _ContactsScreenState extends State<ContactsScreen> {
       fullscreenDialog: true,
     ));
     _callInProgress = false;
-    await KeepAlive.idle(widget.link.user);
+    await LinkKeeper.idle(widget.link.user);
   }
 
   Future<void> _placeCall(String peer, {required bool video}) async {
