@@ -4,6 +4,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'call_screen.dart';
 import 'chat_screen.dart';
+import 'keep_alive.dart';
 import 'signaling.dart';
 import 'theme.dart';
 
@@ -42,6 +43,9 @@ class _MyCallAppState extends State<MyCallApp> {
     final link = Signaling(host: host, user: user, token: token);
     setState(() => _signaling = link);
     link.connect();
+    // Сервис поднимаем сразу: он должен переживать сворачивание приложения
+    // независимо от того, установлено ли соединение в эту секунду.
+    KeepAlive.start(user);
   }
 
   Future<void> _saveAndConnect(String host, String user, String token) async {
@@ -53,6 +57,7 @@ class _MyCallAppState extends State<MyCallApp> {
 
   void _signOut() {
     widget.prefs.remove('token');
+    KeepAlive.stop();
     _signaling?.dispose();
     setState(() => _signaling = null);
   }
@@ -222,11 +227,16 @@ class _ContactsScreenState extends State<ContactsScreen> {
   Future<void> _askPermissions() async {
     await [Permission.camera, Permission.microphone, Permission.notification]
         .request();
+    // Отдельно: снятие ограничений батареи. Без этого производитель телефона
+    // прибьёт процесс даже при работающем foreground service.
+    await KeepAlive.requestPermissions();
   }
 
   Future<void> _onIncoming(Map<String, dynamic> msg) async {
     if (_callInProgress) return; // занято — второй звонок игнорируем
     _callInProgress = true;
+    // Если приложение свёрнуто, увидеть звонок можно только в уведомлении.
+    await KeepAlive.ringing(msg['from'] as String);
     await navigatorKey.currentState?.push(MaterialPageRoute(
       builder: (_) => CallScreen(
         link: widget.link,
@@ -237,6 +247,7 @@ class _ContactsScreenState extends State<ContactsScreen> {
       fullscreenDialog: true,
     ));
     _callInProgress = false;
+    await KeepAlive.idle(widget.link.user);
   }
 
   Future<void> _placeCall(String peer, {required bool video}) async {
