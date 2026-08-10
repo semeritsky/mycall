@@ -43,9 +43,9 @@ class _MyCallAppState extends State<MyCallApp> {
     final link = Signaling(host: host, user: user, token: token);
     setState(() => _signaling = link);
     link.connect();
-    // Сервис поднимаем сразу: он должен переживать сворачивание приложения
-    // независимо от того, установлено ли соединение в эту секунду.
-    LinkKeeper.start(user);
+    // Сервис поднимается не здесь, а после запроса разрешений — см.
+    // _ContactsScreenState._setupBackground. На Android 13+ без разрешения
+    // на уведомления foreground service не стартует.
   }
 
   Future<void> _saveAndConnect(String host, String user, String token) async {
@@ -221,15 +221,20 @@ class _ContactsScreenState extends State<ContactsScreen> {
   void initState() {
     super.initState();
     widget.link.incomingCalls.listen(_onIncoming);
-    _askPermissions();
+    _setupBackground();
+  }
+
+  /// Разрешения, затем foreground service. Именно в этом порядке: без
+  /// разрешения на уведомления сервис на Android 13+ не запускается.
+  Future<void> _setupBackground() async {
+    await [Permission.camera, Permission.microphone, Permission.notification]
+        .request();
+    await LinkKeeper.ensureRunning(widget.link.user);
+    if (mounted) setState(() {});
   }
 
   Future<void> _askPermissions() async {
-    await [Permission.camera, Permission.microphone, Permission.notification]
-        .request();
-    // Отдельно: снятие ограничений батареи. Без этого производитель телефона
-    // прибьёт процесс даже при работающем foreground service.
-    await LinkKeeper.requestPermissions();
+    await [Permission.camera, Permission.microphone].request();
   }
 
   Future<void> _onIncoming(Map<String, dynamic> msg) async {
@@ -304,6 +309,13 @@ class _ContactsScreenState extends State<ContactsScreen> {
                   text: link.state == LinkState.connecting
                       ? 'Подключаемся к серверу…'
                       : link.lastError ?? 'Нет связи с сервером',
+                ),
+              // Без фонового режима звонки не доходят при свёрнутом
+              // приложении, поэтому о его отсутствии надо говорить явно.
+              if (!LinkKeeper.isRunning)
+                _BackgroundWarning(
+                  error: LinkKeeper.lastError,
+                  onRetry: _setupBackground,
                 ),
               Expanded(
                 child: link.contacts.isEmpty
@@ -444,6 +456,43 @@ class _LinkIndicator extends StatelessWidget {
       width: 9,
       height: 9,
       decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+    );
+  }
+}
+
+class _BackgroundWarning extends StatelessWidget {
+  const _BackgroundWarning({required this.error, required this.onRetry});
+  final String? error;
+  final VoidCallback onRetry;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      color: const Color(0xFF2A2118),
+      padding: const EdgeInsets.fromLTRB(20, 12, 12, 12),
+      child: Row(
+        children: [
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'Фоновый режим выключен',
+                  style: TextStyle(
+                      color: amber, fontSize: 13, fontWeight: FontWeight.w600),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  error ?? 'Звонки не будут доходить, пока приложение свёрнуто.',
+                  style: const TextStyle(color: muted, fontSize: 12, height: 1.3),
+                ),
+              ],
+            ),
+          ),
+          TextButton(onPressed: onRetry, child: const Text('Включить')),
+        ],
+      ),
     );
   }
 }
