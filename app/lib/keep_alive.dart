@@ -25,6 +25,21 @@ class LinkKeeper {
 
   static bool get isRunning => _running;
 
+  /// Текст последней ошибки. Показывается в интерфейсе: без отладчика это
+  /// единственный способ узнать, почему сервис не поднялся.
+  static String? lastError;
+
+  /// Запросить разрешения и поднять сервис. Возвращает true, если получилось.
+  ///
+  /// Порядок важен: на Android 13+ foreground service не запускается без
+  /// разрешения на уведомления, поэтому сначала разрешения, потом старт.
+  static Future<bool> ensureRunning(String user) async {
+    if (_running) return true;
+    await requestPermissions();
+    await start(user);
+    return _running;
+  }
+
   /// Разрешения, без которых сервис не запустится: уведомления и снятие
   /// ограничений батареи. Второе особенно важно — с включённой оптимизацией
   /// производитель телефона всё равно прибьёт процесс, невзирая на сервис.
@@ -38,6 +53,7 @@ class LinkKeeper {
         await FlutterForegroundTask.requestIgnoreBatteryOptimization();
       }
     } catch (e) {
+      lastError = 'разрешения: $e';
       debugPrint('LinkKeeper.requestPermissions: $e');
     }
   }
@@ -65,6 +81,7 @@ class LinkKeeper {
       );
       _initialized = true;
     } catch (e) {
+      lastError = 'инициализация: $e';
       debugPrint('LinkKeeper._init: $e');
     }
   }
@@ -78,8 +95,14 @@ class LinkKeeper {
         notificationTitle: 'MyCall на связи',
         notificationText: 'Вы вошли как $user',
       );
-      _running = true;
+      _running = await FlutterForegroundTask.isRunningService;
+      if (!_running) {
+        lastError = 'сервис не поднялся, причина не сообщена системой';
+      } else {
+        lastError = null;
+      }
     } catch (e) {
+      lastError = 'запуск: $e';
       debugPrint('LinkKeeper.start: $e');
     }
   }
