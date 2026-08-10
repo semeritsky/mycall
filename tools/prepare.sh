@@ -36,5 +36,39 @@ if ! grep -q "org.gradle.jvmargs" android/gradle.properties 2>/dev/null; then
   echo "org.gradle.jvmargs=-Xmx1536m" >> android/gradle.properties
 fi
 
+# Страховка от плагинов, которые собираются против устаревшего Android SDK.
+# Симптом: checkReleaseAarMetadata падает со списком androidx-библиотек,
+# «requires ... compile against version 34 or later». Свой compileSdk плагин
+# задаёт сам, поэтому поднимаем его снаружи для всех подпроектов.
+if [[ -f android/build.gradle.kts ]] && ! grep -q "MyCall compileSdk" android/build.gradle.kts; then
+  cat >> android/build.gradle.kts <<'GRADLE'
+
+// MyCall compileSdk override — добавлено tools/prepare.sh
+subprojects {
+    afterEvaluate {
+        extensions.findByName("android")?.let { ext ->
+            runCatching {
+                ext.javaClass
+                    .getMethod("compileSdkVersion", Int::class.javaPrimitiveType)
+                    .invoke(ext, 35)
+            }
+        }
+    }
+}
+GRADLE
+elif [[ -f android/build.gradle ]] && ! grep -q "MyCall compileSdk" android/build.gradle; then
+  cat >> android/build.gradle <<'GRADLE'
+
+// MyCall compileSdk override — добавлено tools/prepare.sh
+subprojects {
+    afterEvaluate { p ->
+        if (p.hasProperty("android")) {
+            p.android.compileSdkVersion 35
+        }
+    }
+}
+GRADLE
+fi
+
 flutter pub get
 echo "Проект готов к сборке: flutter build apk --release"
