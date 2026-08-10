@@ -14,6 +14,13 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CAMERA" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
+    <!-- Android 14+ требует объявить тип сервиса. dataSync — для постоянного
+         соединения с сервером, которое не даёт пропустить звонок. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <!-- Чтобы просить снятие ограничений батареи: без этого производитель
+         телефона выгружает процесс даже при работающем сервисе. -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 
     <!-- Показать экран входящего звонка на заблокированном устройстве -->
     <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
