@@ -10,6 +10,11 @@ import 'signaling.dart';
 import 'theme.dart';
 
 
+/// Домен по умолчанию в поле входа. Это только подстановка — поле остаётся
+/// редактируемым, чтобы при переезде сервера можно было ввести другой адрес
+/// без пересборки приложения.
+const kDefaultHost = 'call.ritsky.com';
+
 final navigatorKey = GlobalKey<NavigatorState>();
 
 Future<void> main() async {
@@ -99,7 +104,13 @@ class _MyCallAppState extends State<MyCallApp> {
         ),
       ),
       home: link == null
-          ? SetupScreen(onSubmit: _saveAndConnect)
+          ? SetupScreen(
+              // После выхода домен и id остаются сохранёнными — подставляем их,
+              // чтобы вводить заново приходилось только токен.
+              initialHost: widget.prefs.getString('host') ?? kDefaultHost,
+              initialUser: widget.prefs.getString('user') ?? '',
+              onSubmit: _saveAndConnect,
+            )
           : ContactsScreen(link: link, onSignOut: _signOut),
     );
   }
@@ -108,18 +119,41 @@ class _MyCallAppState extends State<MyCallApp> {
 // ---------------------------------------------------------------- настройка
 
 class SetupScreen extends StatefulWidget {
-  const SetupScreen({super.key, required this.onSubmit});
+  const SetupScreen({
+    super.key,
+    required this.onSubmit,
+    this.initialHost = kDefaultHost,
+    this.initialUser = '',
+  });
+
   final void Function(String host, String user, String token) onSubmit;
+  final String initialHost;
+  final String initialUser;
 
   @override
   State<SetupScreen> createState() => _SetupScreenState();
 }
 
 class _SetupScreenState extends State<SetupScreen> {
-  final _host = TextEditingController();
-  final _user = TextEditingController();
+  late final TextEditingController _host;
+  late final TextEditingController _user;
   final _token = TextEditingController();
   String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _host = TextEditingController(text: widget.initialHost);
+    _user = TextEditingController(text: widget.initialUser);
+  }
+
+  @override
+  void dispose() {
+    _host.dispose();
+    _user.dispose();
+    _token.dispose();
+    super.dispose();
+  }
 
   void _submit() {
     final host = _host.text.trim().replaceAll(RegExp(r'^https?://|/$'), '');
@@ -177,6 +211,10 @@ class _SetupScreenState extends State<SetupScreen> {
                   decoration: const InputDecoration(labelText: 'Токен'),
                   obscureText: true,
                   autocorrect: false,
+                  // Домен подставлен, id обычно тоже — значит вводить осталось
+                  // только это поле.
+                  autofocus: true,
+                  onSubmitted: (_) => _submit(),
                 ),
                 if (_error != null) ...[
                   const SizedBox(height: 14),
