@@ -22,6 +22,9 @@ dependencies:
   # Foreground service: не даёт Android выгрузить процесс и порвать соединение.
   # Без него звонки не доходят, когда приложение свёрнуто.
   flutter_foreground_task: ^8.17.0
+  # Системный экран входящего звонка: мелодия, вибрация, показ на
+  # заблокированном экране через уведомление с full-screen intent.
+  flutter_callkit_incoming: ^2.5.0
 
   # flutter_local_notifications сознательно не подключён: он требует
   # core library desugaring в Gradle и ломает сборку, а пользы пока нет —
