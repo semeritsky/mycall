@@ -29,9 +29,9 @@ class CallScreen extends StatefulWidget {
 }
 
 class _CallScreenState extends State<CallScreen> {
-  /// Активная сессия. Нужна, чтобы кнопки системного экрана входящего звонка
-  /// (он живёт вне дерева виджетов) могли ответить или отклонить.
-  static CallSession? activeSession;
+  /// Активный экран звонка. Нужен, чтобы кнопки системного экрана входящего
+  /// вызова (он живёт вне дерева виджетов) могли ответить или отклонить.
+  static _CallScreenState? _current;
 
   late final CallSession _session;
   Timer? _ticker;
@@ -52,7 +52,7 @@ class _CallScreenState extends State<CallScreen> {
       isCaller: widget.isCaller,
     );
     _session.addListener(_onSessionChange);
-    activeSession = _session;
+    _current = this;
     _boot();
   }
 
@@ -62,8 +62,14 @@ class _CallScreenState extends State<CallScreen> {
       await _session.prepare();
       if (widget.isCaller) {
         await _session.start();
-      } else {
+      } else if (_session.stage == CallStage.dialing) {
+        // Только если за время подготовки не ответили с системного экрана,
+        // иначе затрём connecting обратно на ringing.
         _session.stage = CallStage.ringing;
+      }
+      // Ответ мог прийти раньше, чем этот экран успел появиться.
+      if (!widget.isCaller && CallScreenAccess.takePendingAccept()) {
+        await _acceptCall();
       }
       if (mounted) setState(() => _ready = true);
 
@@ -81,6 +87,24 @@ class _CallScreenState extends State<CallScreen> {
     } catch (e) {
       if (mounted) setState(() => _fatal = 'Не удалось включить камеру или микрофон: $e');
     }
+  }
+
+  /// Принять звонок. Общий путь для нашей кнопки «Ответить» и для кнопки на
+  /// системном экране: сначала гасим мелодию, потом отвечаем.
+  Future<void> _acceptCall() async {
+    if (_session.stage != CallStage.ringing &&
+        _session.stage != CallStage.dialing) {
+      return; // уже отвечаем или разговор идёт
+    }
+    await IncomingCall.dismiss();
+    await _session.accept();
+  }
+
+  Future<void> _declineCall() async {
+    if (_session.stage != CallStage.ringing) return; // отказ уместен только тут
+    await IncomingCall.dismiss();
+    _session.decline();
+    await _leave();
   }
 
   void _onSessionChange() {
@@ -119,7 +143,7 @@ class _CallScreenState extends State<CallScreen> {
 
   @override
   void dispose() {
-    if (activeSession == _session) activeSession = null;
+    if (_current == this) _current = null;
     _ticker?.cancel();
     _timeout?.cancel();
     _hideTimer?.cancel();
@@ -337,17 +361,14 @@ class _CallScreenState extends State<CallScreen> {
           label: 'Отклонить',
           background: danger,
           size: 68,
-          onTap: () {
-            _session.decline();
-            _leave();
-          },
+          onTap: _declineCall,
         ),
         _RoundButton(
           icon: widget.video ? Icons.videocam : Icons.call,
           label: 'Ответить',
           background: live,
           size: 68,
-          onTap: _session.accept,
+          onTap: _acceptCall,
         ),
       ],
     );
@@ -503,6 +524,24 @@ class _Placeholder extends StatelessWidget {
 class CallScreenAccess {
   CallScreenAccess._();
 
-  static void accept() => _CallScreenState.activeSession?.accept();
-  static void decline() => _CallScreenState.activeSession?.decline();
+  static bool _pendingAccept = false;
+
+  static void accept() {
+    final screen = _CallScreenState._current;
+    if (screen == null) {
+      // С заблокированного экрана ответить можно быстрее, чем приложение
+      // успеет открыть экран звонка. Запоминаем и применим при готовности.
+      _pendingAccept = true;
+      return;
+    }
+    screen._acceptCall();
+  }
+
+  static void decline() => _CallScreenState._current?._declineCall();
+
+  static bool takePendingAccept() {
+    final value = _pendingAccept;
+    _pendingAccept = false;
+    return value;
+  }
 }
