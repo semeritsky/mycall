@@ -6,6 +6,7 @@ import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
 
 import 'call_session.dart';
+import 'incoming_call.dart';
 import 'signaling.dart';
 import 'theme.dart';
 
@@ -28,6 +29,10 @@ class CallScreen extends StatefulWidget {
 }
 
 class _CallScreenState extends State<CallScreen> {
+  /// Активная сессия. Нужна, чтобы кнопки системного экрана входящего звонка
+  /// (он живёт вне дерева виджетов) могли ответить или отклонить.
+  static CallSession? activeSession;
+
   late final CallSession _session;
   Timer? _ticker;
   Timer? _timeout;
@@ -47,6 +52,7 @@ class _CallScreenState extends State<CallScreen> {
       isCaller: widget.isCaller,
     );
     _session.addListener(_onSessionChange);
+    activeSession = _session;
     _boot();
   }
 
@@ -80,6 +86,7 @@ class _CallScreenState extends State<CallScreen> {
   void _onSessionChange() {
     if (!mounted) return;
     if (_session.stage == CallStage.active) {
+      IncomingCall.dismiss();
       _timeout?.cancel();
       _timeout = null;
       // Первый раз прячем через 4 секунды после соединения, а также
@@ -100,6 +107,7 @@ class _CallScreenState extends State<CallScreen> {
   }
 
   Future<void> _leave() async {
+    await IncomingCall.dismiss(); // остановить мелодию
     _ticker?.cancel();
     _ticker = null;
     _timeout?.cancel();
@@ -111,6 +119,7 @@ class _CallScreenState extends State<CallScreen> {
 
   @override
   void dispose() {
+    if (activeSession == _session) activeSession = null;
     _ticker?.cancel();
     _timeout?.cancel();
     _hideTimer?.cancel();
@@ -487,4 +496,13 @@ class _Placeholder extends StatelessWidget {
       ),
     );
   }
+}
+
+/// Мостик для системного экрана входящего звонка: он находится вне дерева
+/// виджетов и не может дотянуться до состояния экрана обычным путём.
+class CallScreenAccess {
+  CallScreenAccess._();
+
+  static void accept() => _CallScreenState.activeSession?.accept();
+  static void decline() => _CallScreenState.activeSession?.decline();
 }

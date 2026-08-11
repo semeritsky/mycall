@@ -4,6 +4,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'call_screen.dart';
 import 'chat_screen.dart';
+import 'incoming_call.dart';
 import 'keep_alive.dart';
 import 'signaling.dart';
 import 'theme.dart';
@@ -230,6 +231,13 @@ class _ContactsScreenState extends State<ContactsScreen> {
     await [Permission.camera, Permission.microphone, Permission.notification]
         .request();
     await LinkKeeper.ensureRunning(widget.link.user);
+    await IncomingCall.requestPermissions();
+    // Кнопки системного экрана вызова живут вне дерева виджетов, поэтому
+    // адресуем их к активной сессии напрямую.
+    IncomingCall.listen(
+      onAccept: () => CallScreenAccess.accept(),
+      onDecline: () => CallScreenAccess.decline(),
+    );
     if (mounted) setState(() {});
   }
 
@@ -240,18 +248,23 @@ class _ContactsScreenState extends State<ContactsScreen> {
   Future<void> _onIncoming(Map<String, dynamic> msg) async {
     if (_callInProgress) return; // занято — второй звонок игнорируем
     _callInProgress = true;
-    // Если приложение свёрнуто, увидеть звонок можно только в уведомлении.
-    await LinkKeeper.ringing(msg['from'] as String);
+    final from = msg['from'] as String;
+    final withVideo = (msg['video'] as bool?) ?? true;
+    // Системный экран вызова: мелодия, вибрация, показ на заблокированном
+    // экране. Наш экран открывается тут же — он и обслуживает сам звонок.
+    await IncomingCall.show(peer: from, video: withVideo);
+    await LinkKeeper.ringing(from);
     await navigatorKey.currentState?.push(MaterialPageRoute(
       builder: (_) => CallScreen(
         link: widget.link,
-        peer: msg['from'] as String,
-        video: (msg['video'] as bool?) ?? true,
+        peer: from,
+        video: withVideo,
         isCaller: false,
       ),
       fullscreenDialog: true,
     ));
     _callInProgress = false;
+    await IncomingCall.dismiss();
     await LinkKeeper.idle(widget.link.user);
   }
 
