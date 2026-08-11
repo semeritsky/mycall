@@ -29,14 +29,58 @@ class LinkKeeper {
   /// единственный способ узнать, почему сервис не поднялся.
   static String? lastError;
 
+  /// Снято ли ограничение батареи.
+  ///
+  /// Это не косметика. Через несколько минут неподвижности с погашенным
+  /// экраном Android уходит в Doze и отключает приложениям сеть — foreground
+  /// service тут не помогает, он защищает процесс, а не доступ к сети.
+  /// Единственное штатное исключение из Doze — белый список батареи.
+  static bool batteryUnrestricted = true;
+
+  /// Перечитать фактическое состояние у системы.
+  static Future<void> refresh() async {
+    try {
+      _running = await FlutterForegroundTask.isRunningService;
+      batteryUnrestricted =
+          await FlutterForegroundTask.isIgnoringBatteryOptimizations;
+    } catch (e) {
+      debugPrint('LinkKeeper.refresh: $e');
+    }
+  }
+
+  /// Открыть системные настройки батареи. Прямой запрос диалогом часть
+  /// прошивок отклоняет молча, поэтому нужен и этот путь.
+  static Future<void> openBatterySettings() async {
+    try {
+      await FlutterForegroundTask.openIgnoreBatteryOptimizationSettings();
+    } catch (e) {
+      debugPrint('LinkKeeper.openBatterySettings: $e');
+    }
+  }
+
   /// Запросить разрешения и поднять сервис. Возвращает true, если получилось.
   ///
   /// Порядок важен: на Android 13+ foreground service не запускается без
   /// разрешения на уведомления, поэтому сначала разрешения, потом старт.
   static Future<bool> ensureRunning(String user) async {
-    if (_running) return true;
     await requestPermissions();
-    await start(user);
+    await refresh();
+    if (_running) return true;
+
+    // Android отказывает в запуске foreground service, если приложение ещё не
+    // считается активным на экране. При повторном входе разрешения уже выданы,
+    // диалогов нет, и запуск случается слишком рано — отсюда пауза.
+    await Future<void>.delayed(const Duration(milliseconds: 400));
+
+    // Три попытки: остановленный сервис освобождается не мгновенно, и первый
+    // запуск сразу после выхода из аккаунта нередко не проходит.
+    for (var attempt = 1; attempt <= 3 && !_running; attempt++) {
+      await start(user);
+      if (!_running) {
+        await Future<void>.delayed(Duration(milliseconds: 500 * attempt));
+        await refresh();
+      }
+    }
     return _running;
   }
 
@@ -89,6 +133,10 @@ class LinkKeeper {
   /// Запустить сервис. Вызывается, когда установлено соединение с сервером.
   static Future<void> start(String user) async {
     _init();
+    if (!_initialized) {
+      lastError ??= 'плагин не инициализирован';
+      return;
+    }
     if (_running) return;
     try {
       await FlutterForegroundTask.startService(
@@ -143,5 +191,9 @@ class LinkKeeper {
       debugPrint('LinkKeeper.stop: $e');
     }
     _running = false;
+    // Сбрасываем инициализацию: после остановки плагин мог остаться в
+    // несогласованном состоянии, и следующий запуск должен начать заново.
+    _initialized = false;
+    lastError = null;
   }
 }
