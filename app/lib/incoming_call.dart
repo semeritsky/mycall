@@ -23,6 +23,13 @@ class IncomingCall {
   static bool _listening = false;
   static String? lastError;
 
+  /// Заглушка событий на время нашего собственного закрытия экрана.
+  ///
+  /// Пакет на endAllCalls() отвечает событием «звонок завершён». Без этого
+  /// флага оно приходит нам же, трактуется как отказ абонента и сбрасывает
+  /// только что принятый разговор — трубка кладёт себя сама.
+  static bool _suppress = false;
+
   static String _idFor(String peer) => 'mycall-$peer';
 
   /// Разрешение на full-screen intent. На Android 14+ без него уведомление
@@ -73,11 +80,14 @@ class IncomingCall {
 
   /// Убрать системный вызов и остановить мелодию.
   static Future<void> dismiss() async {
+    _suppress = true;
     try {
       await FlutterCallkitIncoming.endAllCalls();
     } catch (e) {
       debugPrint('IncomingCall.dismiss: $e');
     }
+    // События приходят асинхронно и с задержкой, поэтому глушим с запасом.
+    Timer(const Duration(seconds: 2), () => _suppress = false);
   }
 
   /// Подписаться на кнопки системного экрана. Вызывается один раз при старте.
@@ -89,13 +99,15 @@ class IncomingCall {
     _listening = true;
     try {
       FlutterCallkitIncoming.onEvent.listen((event) {
-        if (event == null) return;
+        if (event == null || _suppress) return;
         switch (event.event) {
           case Event.actionCallAccept:
             onAccept();
             break;
+          // Только явный отказ и истёкший таймаут. actionCallEnded здесь
+          // сознательно отсутствует: его присылает и наш собственный
+          // dismiss(), и трактовать его как отказ нельзя.
           case Event.actionCallDecline:
-          case Event.actionCallEnded:
           case Event.actionCallTimeout:
             onDecline();
             break;
