@@ -215,14 +215,42 @@ class ContactsScreen extends StatefulWidget {
   State<ContactsScreen> createState() => _ContactsScreenState();
 }
 
-class _ContactsScreenState extends State<ContactsScreen> {
+class _ContactsScreenState extends State<ContactsScreen>
+    with WidgetsBindingObserver {
   bool _callInProgress = false;
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     widget.link.incomingCalls.listen(_onIncoming);
     _setupBackground();
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    // Возврат из системных настроек: перечитываем состояние, чтобы
+    // предупреждение исчезло само, без перезапуска приложения.
+    if (state == AppLifecycleState.resumed) {
+      _healBackground();
+    }
+  }
+
+  /// Каждый раз, когда приложение снова на экране, проверяем сервис и, если он
+  /// упал или не поднялся после повторного входа, пробуем ещё раз. Это тот
+  /// момент, когда система разрешает запуск охотнее всего.
+  Future<void> _healBackground() async {
+    await LinkKeeper.refresh();
+    if (!LinkKeeper.isRunning) {
+      await LinkKeeper.ensureRunning(widget.link.user);
+    }
+    if (mounted) setState(() {});
   }
 
   /// Разрешения, затем foreground service. Именно в этом порядке: без
@@ -327,8 +355,22 @@ class _ContactsScreenState extends State<ContactsScreen> {
               // приложении, поэтому о его отсутствии надо говорить явно.
               if (!LinkKeeper.isRunning)
                 _BackgroundWarning(
-                  error: LinkKeeper.lastError,
-                  onRetry: _setupBackground,
+                  title: 'Фоновый режим выключен',
+                  text: LinkKeeper.lastError ??
+                      'Звонки не будут доходить, пока приложение свёрнуто.',
+                  actionLabel: 'Включить',
+                  onAction: _setupBackground,
+                ),
+              // Отдельная беда: сервис работает, но Android через несколько
+              // минут сна отключает приложению сеть. Спасает только белый
+              // список батареи.
+              if (LinkKeeper.isRunning && !LinkKeeper.batteryUnrestricted)
+                _BackgroundWarning(
+                  title: 'Телефон усыпляет приложение',
+                  text: 'Через несколько минут в спящем режиме связь рвётся и '
+                      'звонок не дойдёт. Снимите ограничения батареи.',
+                  actionLabel: 'Настройки',
+                  onAction: LinkKeeper.openBatterySettings,
                 ),
               Expanded(
                 child: link.contacts.isEmpty
@@ -474,9 +516,17 @@ class _LinkIndicator extends StatelessWidget {
 }
 
 class _BackgroundWarning extends StatelessWidget {
-  const _BackgroundWarning({required this.error, required this.onRetry});
-  final String? error;
-  final VoidCallback onRetry;
+  const _BackgroundWarning({
+    required this.title,
+    required this.text,
+    required this.actionLabel,
+    required this.onAction,
+  });
+
+  final String title;
+  final String text;
+  final String actionLabel;
+  final VoidCallback onAction;
 
   @override
   Widget build(BuildContext context) {
@@ -490,20 +540,20 @@ class _BackgroundWarning extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const Text(
-                  'Фоновый режим выключен',
-                  style: TextStyle(
+                Text(
+                  title,
+                  style: const TextStyle(
                       color: amber, fontSize: 13, fontWeight: FontWeight.w600),
                 ),
                 const SizedBox(height: 2),
                 Text(
-                  error ?? 'Звонки не будут доходить, пока приложение свёрнуто.',
+                  text,
                   style: const TextStyle(color: muted, fontSize: 12, height: 1.3),
                 ),
               ],
             ),
           ),
-          TextButton(onPressed: onRetry, child: const Text('Включить')),
+          TextButton(onPressed: onAction, child: Text(actionLabel)),
         ],
       ),
     );
