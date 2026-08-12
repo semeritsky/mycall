@@ -295,6 +295,8 @@ class _ContactsScreenState extends State<ContactsScreen>
   /// упал или не поднялся после повторного входа, пробуем ещё раз. Это тот
   /// момент, когда система разрешает запуск охотнее всего.
   Future<void> _healBackground() async {
+    // После сна сеть только что вернулась — не ждём очередной паузы отсчёта.
+    widget.link.reconnectNow();
     await LinkKeeper.refresh();
     if (!LinkKeeper.isRunning) {
       await LinkKeeper.ensureRunning(widget.link.user);
