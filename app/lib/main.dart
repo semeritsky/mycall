@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -267,17 +269,31 @@ class ContactsScreen extends StatefulWidget {
 class _ContactsScreenState extends State<ContactsScreen>
     with WidgetsBindingObserver {
   bool _callInProgress = false;
+  StreamSubscription<Map<String, dynamic>>? _endWatch;
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     widget.link.incomingCalls.listen(_onIncoming);
+
+    // Отбой нельзя доверять только экрану звонка: на стороне вызываемого он
+    // может ещё не открыться или уже закрыться, а системный вызов с мелодией
+    // существует отдельно от нашего дерева виджетов — и тогда гасить его
+    // оказывается некому. Этот слушатель живёт всё время, пока вы в сети.
+    _endWatch = widget.link.signals.listen((msg) {
+      final type = msg['type'];
+      if (type == 'hangup' || type == 'decline') {
+        IncomingCall.dismiss();
+      }
+    });
+
     _setupBackground();
   }
 
   @override
   void dispose() {
+    _endWatch?.cancel();
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
   }
@@ -333,7 +349,17 @@ class _ContactsScreenState extends State<ContactsScreen>
     // экране. Наш экран открывается тут же — он и обслуживает сам звонок.
     await IncomingCall.show(peer: from, video: withVideo);
     await LinkKeeper.ringing(from);
-    await navigatorKey.currentState?.push(MaterialPageRoute(
+
+    final navigator = navigatorKey.currentState;
+    if (navigator == null) {
+      // Открыть экран звонка не получилось — значит обслуживать вызов нечем,
+      // и оставлять звонящую мелодию нельзя.
+      await IncomingCall.dismiss();
+      _callInProgress = false;
+      return;
+    }
+
+    await navigator.push(MaterialPageRoute(
       builder: (_) => CallScreen(
         link: widget.link,
         peer: from,
