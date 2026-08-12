@@ -252,6 +252,17 @@ class Signaling extends ChangeNotifier {
     _send({'type': 'msg', 'id': id, 'to': peer, 'text': text});
   }
 
+  /// Переподключиться немедленно, не дожидаясь очередной паузы.
+  ///
+  /// Нужно при возврате в приложение: система только что вернула сеть, а наш
+  /// отсчёт до следующей попытки может тикать ещё полминуты.
+  void reconnectNow() {
+    if (_disposed || state != LinkState.offline) return;
+    _reconnectTimer?.cancel();
+    _attempt = 0;
+    connect();
+  }
+
   void ring(String peer, {required bool video}) =>
       _send({'type': 'call', 'to': peer, 'video': video});
 
