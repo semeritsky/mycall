@@ -10,10 +10,16 @@ import 'signaling.dart';
 import 'theme.dart';
 
 
-/// Домен по умолчанию в поле входа. Это только подстановка — поле остаётся
-/// редактируемым, чтобы при переезде сервера можно было ввести другой адрес
-/// без пересборки приложения.
+/// Значения по умолчанию в полях входа. Это только подстановка — поля остаются
+/// редактируемыми, чтобы при переезде сервера или входе под другим именем не
+/// требовалась пересборка приложения.
 const kDefaultHost = 'call.ritsky.com';
+const kDefaultUser = 'mama';
+
+/// ВНИМАНИЕ: токен — это пароль, и здесь он лежит внутри APK в открытом виде.
+/// Любой, у кого есть файл приложения, может его прочитать и войти как
+/// kDefaultUser. Держите такую сборку только у тех, кому она предназначена.
+const kDefaultToken = 'f9c5015ec67c070a06d70152d163a6fab97e6171443e4809';
 
 final navigatorKey = GlobalKey<NavigatorState>();
 
@@ -105,10 +111,11 @@ class _MyCallAppState extends State<MyCallApp> {
       ),
       home: link == null
           ? SetupScreen(
-              // После выхода домен и id остаются сохранёнными — подставляем их,
-              // чтобы вводить заново приходилось только токен.
+              // Сохранённые значения имеют приоритет над встроенными:
+              // если человек уже входил под своим именем, оно и подставится.
               initialHost: widget.prefs.getString('host') ?? kDefaultHost,
-              initialUser: widget.prefs.getString('user') ?? '',
+              initialUser: widget.prefs.getString('user') ?? kDefaultUser,
+              initialToken: widget.prefs.getString('token') ?? kDefaultToken,
               onSubmit: _saveAndConnect,
             )
           : ContactsScreen(link: link, onSignOut: _signOut),
@@ -123,12 +130,14 @@ class SetupScreen extends StatefulWidget {
     super.key,
     required this.onSubmit,
     this.initialHost = kDefaultHost,
-    this.initialUser = '',
+    this.initialUser = kDefaultUser,
+    this.initialToken = kDefaultToken,
   });
 
   final void Function(String host, String user, String token) onSubmit;
   final String initialHost;
   final String initialUser;
+  final String initialToken;
 
   @override
   State<SetupScreen> createState() => _SetupScreenState();
@@ -137,7 +146,7 @@ class SetupScreen extends StatefulWidget {
 class _SetupScreenState extends State<SetupScreen> {
   late final TextEditingController _host;
   late final TextEditingController _user;
-  final _token = TextEditingController();
+  late final TextEditingController _token;
   String? _error;
 
   @override
@@ -145,6 +154,7 @@ class _SetupScreenState extends State<SetupScreen> {
     super.initState();
     _host = TextEditingController(text: widget.initialHost);
     _user = TextEditingController(text: widget.initialUser);
+    _token = TextEditingController(text: widget.initialToken);
   }
 
   @override
@@ -211,9 +221,9 @@ class _SetupScreenState extends State<SetupScreen> {
                   decoration: const InputDecoration(labelText: 'Токен'),
                   obscureText: true,
                   autocorrect: false,
-                  // Домен подставлен, id обычно тоже — значит вводить осталось
-                  // только это поле.
-                  autofocus: true,
+                  // Клавиатуру поднимаем только если вводить действительно
+                  // нужно: при заполненных полях она лишь мешает.
+                  autofocus: widget.initialToken.isEmpty,
                   onSubmitted: (_) => _submit(),
                 ),
                 if (_error != null) ...[
@@ -233,6 +243,7 @@ class _SetupScreenState extends State<SetupScreen> {
                     child: const Text('Подключиться'),
                   ),
                 ),
+
               ],
             ),
           ),
