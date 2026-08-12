@@ -307,6 +307,7 @@ class ContactsScreen extends StatefulWidget {
 class _ContactsScreenState extends State<ContactsScreen>
     with WidgetsBindingObserver {
   bool _callInProgress = false;
+  String? _incomingFrom;
   StreamSubscription<Map<String, dynamic>>? _endWatch;
 
   @override
@@ -369,7 +370,7 @@ class _ContactsScreenState extends State<ContactsScreen>
     // адресуем их к активной сессии напрямую.
     IncomingCall.listen(
       onAccept: () => CallScreenAccess.accept(),
-      onDecline: () => CallScreenAccess.decline(),
+      onDecline: _declineIncoming,
     );
     if (mounted) setState(() {});
   }
@@ -378,11 +379,27 @@ class _ContactsScreenState extends State<ContactsScreen>
     await [Permission.camera, Permission.microphone].request();
   }
 
+  /// Отказ от входящего звонка.
+  ///
+  /// Отправляем сигнал сами, а не только через экран звонка: при свёрнутом
+  /// приложении экран может быть ещё не готов, и тогда звонящий продолжал бы
+  /// набирать в пустоту. Повторный отказ от экрана безвреден — звонящий
+  /// завершает вызов по первому.
+  void _declineIncoming() {
+    final from = _incomingFrom;
+    if (from != null) {
+      widget.link.sendSignal({'type': 'decline', 'to': from});
+    }
+    IncomingCall.dismiss();
+    CallScreenAccess.decline();
+  }
+
   Future<void> _onIncoming(Map<String, dynamic> msg) async {
     if (_callInProgress) return; // занято — второй звонок игнорируем
     _callInProgress = true;
     final from = msg['from'] as String;
     final withVideo = (msg['video'] as bool?) ?? true;
+    _incomingFrom = from;
     // Системный экран вызова: мелодия, вибрация, показ на заблокированном
     // экране. Наш экран открывается тут же — он и обслуживает сам звонок.
     await IncomingCall.show(peer: displayName(from), video: withVideo);
@@ -407,6 +424,7 @@ class _ContactsScreenState extends State<ContactsScreen>
       fullscreenDialog: true,
     ));
     _callInProgress = false;
+    _incomingFrom = null;
     await IncomingCall.dismiss();
     await LinkKeeper.idle(widget.link.user);
   }

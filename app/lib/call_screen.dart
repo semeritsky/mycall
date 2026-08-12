@@ -102,7 +102,11 @@ class _CallScreenState extends State<CallScreen> {
   }
 
   Future<void> _declineCall() async {
-    if (_session.stage != CallStage.ringing) return; // отказ уместен только тут
+    // Раньше стояла проверка на состояние «звонит», и это была ошибка: при
+    // свёрнутом приложении подготовка до него не доходила, отказ не уходил, и
+    // звонящий продолжал набирать. Единственное, что отказом быть не может, —
+    // это уже идущий разговор.
+    if (_session.stage == CallStage.active) return;
     await IncomingCall.dismiss();
     _session.decline();
     await _leave();
@@ -306,7 +310,11 @@ class _CallScreenState extends State<CallScreen> {
           ),
 
           // Своё превью — небольшое окно в углу.
-          if (_ready && widget.video && _session.cameraEnabled)
+          // Камера открывается только после ответа, поэтому смотрим на сам
+          // поток, а не на факт готовности экрана.
+          if (widget.video &&
+              _session.cameraEnabled &&
+              _session.localRenderer.srcObject != null)
             Positioned(
               right: 16,
               top: MediaQuery.of(context).viewPadding.top + 96,

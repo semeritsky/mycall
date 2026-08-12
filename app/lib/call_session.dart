@@ -48,10 +48,31 @@ class CallSession extends ChangeNotifier {
   String? iceState;
   DateTime? connectedAt;
 
-  /// Общая подготовка: рендереры, локальное медиа, peer connection.
+  /// Подготовка без камеры: только рендереры и подписка на сигналы.
+  ///
+  /// Камеру и микрофон здесь сознательно не открываем. Android запрещает
+  /// фоновым приложениям доступ к камере, а на входящем звонке приложение как
+  /// раз свёрнуто — getUserMedia падал, и экран звонка оставался в нерабочем
+  /// состоянии: отказ не отправлялся, звонящий продолжал набирать.
+  /// Заодно у вызываемого больше не горит камера до того, как он ответил.
   Future<void> prepare() async {
     await localRenderer.initialize();
     await remoteRenderer.initialize();
+
+    // Подписываемся сразу: SDP и кандидаты складываются в _heldOffer и
+    // _pendingCandidates и применятся, когда появится peer connection.
+    _sub = signaling.signals.listen(_onSignal);
+    for (final buffered in signaling.takeBufferedSignals(peer)) {
+      await _onSignal(buffered);
+    }
+  }
+
+  /// Открыть камеру с микрофоном и создать peer connection.
+  ///
+  /// Вызывается в момент, когда звонок реально начинается: у звонящего — сразу,
+  /// у вызываемого — после нажатия «Ответить», когда приложение уже на экране.
+  Future<void> _openMedia() async {
+    if (_pc != null) return;
 
     _localStream = await navigator.mediaDevices.getUserMedia({
       'audio': {
@@ -126,19 +147,13 @@ class CallSession extends ChangeNotifier {
     };
 
     await Helper.setSpeakerphoneOn(true);
-
-    // Подписываемся только теперь, когда _pc готов принимать SDP и кандидатов,
-    // и сразу разбираем то, что успело прийти пока включалась камера.
-    _sub = signaling.signals.listen(_onSignal);
-    for (final buffered in signaling.takeBufferedSignals(peer)) {
-      await _onSignal(buffered);
-    }
   }
 
   /// Исходящий звонок: звоним и сразу отправляем offer.
   Future<void> start() async {
     stage = CallStage.dialing;
     notifyListeners();
+    await _openMedia();
     signaling.ring(peer, video: video);
 
     final offer = await _pc!.createOffer({
@@ -159,6 +174,8 @@ class CallSession extends ChangeNotifier {
     _accepted = true;
     stage = CallStage.connecting;
     notifyListeners();
+    // Теперь приложение на переднем плане, и камера откроется без отказа.
+    await _openMedia();
     final offer = _heldOffer;
     if (offer != null) {
       _heldOffer = null;
@@ -168,6 +185,8 @@ class CallSession extends ChangeNotifier {
   }
 
   void decline() {
+    // Без проверок состояния: отказ должен уходить даже если подготовка не
+    // дошла до конца — иначе у звонящего вызов идёт в пустоту.
     signaling.sendSignal({'type': 'decline', 'to': peer});
     stage = CallStage.ended;
     notifyListeners();
