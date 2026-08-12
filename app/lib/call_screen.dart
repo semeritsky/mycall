@@ -6,6 +6,7 @@ import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
 
 import 'call_session.dart';
+import 'family.dart';
 import 'incoming_call.dart';
 import 'signaling.dart';
 import 'theme.dart';
@@ -271,7 +272,7 @@ class _CallScreenState extends State<CallScreen> {
               child: Column(
                 children: [
                   Text(
-                    widget.peer,
+                    displayName(widget.peer),
                     style: const TextStyle(
                         color: Colors.white,
                         fontSize: 22,
@@ -510,7 +511,7 @@ class _Placeholder extends StatelessWidget {
         ),
         alignment: Alignment.center,
         child: Text(
-          peer.substring(0, 1).toUpperCase(),
+          displayName(peer).substring(0, 1).toUpperCase(),
           style: const TextStyle(
               fontSize: 44, fontWeight: FontWeight.w600, color: textColor),
         ),

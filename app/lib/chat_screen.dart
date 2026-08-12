@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import 'family.dart';
 import 'signaling.dart';
 import 'theme.dart';
 
@@ -63,7 +64,7 @@ class _ChatScreenState extends State<ChatScreen> {
         title: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(widget.peer,
+            Text(displayName(widget.peer),
                 style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
             Text(
               isOnline ? 'в сети' : 'не в сети',

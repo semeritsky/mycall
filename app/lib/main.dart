@@ -6,22 +6,16 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'call_screen.dart';
 import 'chat_screen.dart';
+import 'family.dart';
 import 'incoming_call.dart';
 import 'keep_alive.dart';
 import 'signaling.dart';
 import 'theme.dart';
 
 
-/// Значения по умолчанию в полях входа. Это только подстановка — поля остаются
-/// редактируемыми, чтобы при переезде сервера или входе под другим именем не
+/// Адрес сервера. Поле остаётся редактируемым, чтобы при переезде сервера не
 /// требовалась пересборка приложения.
 const kDefaultHost = 'call.ritsky.com';
-const kDefaultUser = 'mama';
-
-/// ВНИМАНИЕ: токен — это пароль, и здесь он лежит внутри APK в открытом виде.
-/// Любой, у кого есть файл приложения, может его прочитать и войти как
-/// kDefaultUser. Держите такую сборку только у тех, кому она предназначена.
-const kDefaultToken = 'f9c5015ec67c070a06d70152d163a6fab97e6171443e4809';
 
 final navigatorKey = GlobalKey<NavigatorState>();
 
@@ -48,7 +42,9 @@ class _MyCallAppState extends State<MyCallApp> {
     final host = widget.prefs.getString('host');
     final user = widget.prefs.getString('user');
     final token = widget.prefs.getString('token');
-    if (host != null && user != null && token != null) {
+    // Сохранённого человека может уже не быть в составе семьи — например, его
+    // переименовали. Тогда не пытаемся войти под ним, а показываем выбор.
+    if (host != null && user != null && token != null && kFamily.containsKey(user)) {
       _openLink(host, user, token);
     }
   }
@@ -113,11 +109,9 @@ class _MyCallAppState extends State<MyCallApp> {
       ),
       home: link == null
           ? SetupScreen(
-              // Сохранённые значения имеют приоритет над встроенными:
-              // если человек уже входил под своим именем, оно и подставится.
+              // Кто входил на этом телефоне в прошлый раз — тот и выбран.
               initialHost: widget.prefs.getString('host') ?? kDefaultHost,
               initialUser: widget.prefs.getString('user') ?? kDefaultUser,
-              initialToken: widget.prefs.getString('token') ?? kDefaultToken,
               onSubmit: _saveAndConnect,
             )
           : ContactsScreen(link: link, onSignOut: _signOut),
@@ -133,13 +127,11 @@ class SetupScreen extends StatefulWidget {
     required this.onSubmit,
     this.initialHost = kDefaultHost,
     this.initialUser = kDefaultUser,
-    this.initialToken = kDefaultToken,
   });
 
   final void Function(String host, String user, String token) onSubmit;
   final String initialHost;
   final String initialUser;
-  final String initialToken;
 
   @override
   State<SetupScreen> createState() => _SetupScreenState();
@@ -147,33 +139,35 @@ class SetupScreen extends StatefulWidget {
 
 class _SetupScreenState extends State<SetupScreen> {
   late final TextEditingController _host;
-  late final TextEditingController _user;
-  late final TextEditingController _token;
+  late String _selected;
+  bool _editHost = false;
   String? _error;
 
   @override
   void initState() {
     super.initState();
     _host = TextEditingController(text: widget.initialHost);
-    _user = TextEditingController(text: widget.initialUser);
-    _token = TextEditingController(text: widget.initialToken);
+    // Если сохранённого имени в списке семьи нет (например, состав поменялся),
+    // не падаем, а берём первого.
+    _selected = kFamily.containsKey(widget.initialUser)
+        ? widget.initialUser
+        : kFamily.keys.first;
   }
 
   @override
   void dispose() {
     _host.dispose();
-    _user.dispose();
-    _token.dispose();
     super.dispose();
   }
 
   void _submit() {
     final host = _host.text.trim().replaceAll(RegExp(r'^https?://|/$'), '');
-    if (host.isEmpty || _user.text.trim().isEmpty || _token.text.isEmpty) {
-      setState(() => _error = 'Заполните все три поля.');
+    final token = kFamily[_selected];
+    if (host.isEmpty || token == null) {
+      setState(() => _error = 'Проверьте адрес сервера и выбор человека.');
       return;
     }
-    widget.onSubmit(host, _user.text.trim(), _token.text.trim());
+    widget.onSubmit(host, _selected, token);
   }
 
   @override
@@ -193,44 +187,68 @@ class _SetupScreenState extends State<SetupScreen> {
                       color: amber, shape: BoxShape.circle),
                 ),
                 const SizedBox(height: 20),
-                Text('Свой канал связи',
+                Text('Кто ты?',
                     style: Theme.of(context).textTheme.headlineSmall),
                 const SizedBox(height: 8),
                 const Text(
-                  'Укажите сервер, который вы развернули, и свои данные из '
-                  'списка USERS.',
+                  'Выбери себя и нажми «Подключиться».',
                   style: TextStyle(color: muted, height: 1.4),
                 ),
                 const SizedBox(height: 28),
-                TextField(
-                  controller: _host,
-                  decoration: const InputDecoration(
-                      labelText: 'Домен сервера',
-                      hintText: 'call.example.com'),
-                  keyboardType: TextInputType.url,
-                  autocorrect: false,
+
+                // Список семьи. Токен подставляется сам, вводить нечего.
+                Container(
+                  decoration: BoxDecoration(
+                    color: surface,
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  padding: const EdgeInsets.symmetric(horizontal: 16),
+                  child: DropdownButtonHideUnderline(
+                    child: DropdownButton<String>(
+                      value: _selected,
+                      isExpanded: true,
+                      dropdownColor: surfaceHigh,
+                      borderRadius: BorderRadius.circular(12),
+                      icon: const Icon(Icons.expand_more, color: muted),
+                      style: const TextStyle(color: textColor, fontSize: 17),
+                      padding: const EdgeInsets.symmetric(vertical: 6),
+                      items: [
+                        for (final id in kFamily.keys)
+                          DropdownMenuItem(
+                            value: id,
+                            child: Row(
+                              children: [
+                                Container(
+                                  width: 34,
+                                  height: 34,
+                                  decoration: BoxDecoration(
+                                    color: surfaceHigh,
+                                    borderRadius: BorderRadius.circular(11),
+                                  ),
+                                  alignment: Alignment.center,
+                                  child: Text(
+                                    displayName(id).substring(0, 1),
+                                    style: const TextStyle(
+                                        color: amber,
+                                        fontWeight: FontWeight.w600),
+                                  ),
+                                ),
+                                const SizedBox(width: 14),
+                                Text(displayName(id)),
+                              ],
+                            ),
+                          ),
+                      ],
+                      onChanged: (value) {
+                        if (value != null) setState(() => _selected = value);
+                      },
+                    ),
+                  ),
                 ),
-                const SizedBox(height: 12),
-                TextField(
-                  controller: _user,
-                  decoration: const InputDecoration(
-                      labelText: 'Ваш id', hintText: 'alex'),
-                  autocorrect: false,
-                ),
-                const SizedBox(height: 12),
-                TextField(
-                  controller: _token,
-                  decoration: const InputDecoration(labelText: 'Токен'),
-                  obscureText: true,
-                  autocorrect: false,
-                  // Клавиатуру поднимаем только если вводить действительно
-                  // нужно: при заполненных полях она лишь мешает.
-                  autofocus: widget.initialToken.isEmpty,
-                  onSubmitted: (_) => _submit(),
-                ),
+
                 if (_error != null) ...[
                   const SizedBox(height: 14),
-                  Text(_error!, style: const TextStyle(color: Color(0xFFE07A5F))),
+                  Text(_error!, style: const TextStyle(color: danger)),
                 ],
                 const SizedBox(height: 24),
                 SizedBox(
@@ -245,7 +263,27 @@ class _SetupScreenState extends State<SetupScreen> {
                     child: const Text('Подключиться'),
                   ),
                 ),
+                const SizedBox(height: 20),
 
+                // Адрес сервера убран с глаз: нужен раз в жизни, при переезде.
+                if (_editHost)
+                  TextField(
+                    controller: _host,
+                    decoration: const InputDecoration(
+                        labelText: 'Адрес сервера'),
+                    keyboardType: TextInputType.url,
+                    autocorrect: false,
+                  )
+                else
+                  Center(
+                    child: TextButton(
+                      onPressed: () => setState(() => _editHost = true),
+                      child: Text(
+                        'Сервер: ${_host.text}',
+                        style: const TextStyle(color: muted, fontSize: 12),
+                      ),
+                    ),
+                  ),
               ],
             ),
           ),
@@ -347,8 +385,8 @@ class _ContactsScreenState extends State<ContactsScreen>
     final withVideo = (msg['video'] as bool?) ?? true;
     // Системный экран вызова: мелодия, вибрация, показ на заблокированном
     // экране. Наш экран открывается тут же — он и обслуживает сам звонок.
-    await IncomingCall.show(peer: from, video: withVideo);
-    await LinkKeeper.ringing(from);
+    await IncomingCall.show(peer: displayName(from), video: withVideo);
+    await LinkKeeper.ringing(displayName(from));
 
     final navigator = navigatorKey.currentState;
     if (navigator == null) {
@@ -408,7 +446,7 @@ class _ContactsScreenState extends State<ContactsScreen>
               children: [
                 _LinkIndicator(state: link.state),
                 const SizedBox(width: 10),
-                Text(link.user,
+                Text(displayName(link.user),
                     style: Theme.of(context).textTheme.titleMedium),
               ],
             ),
@@ -427,27 +465,6 @@ class _ContactsScreenState extends State<ContactsScreen>
                   text: link.state == LinkState.connecting
                       ? 'Подключаемся к серверу…'
                       : link.lastError ?? 'Нет связи с сервером',
-                ),
-              // Без фонового режима звонки не доходят при свёрнутом
-              // приложении, поэтому о его отсутствии надо говорить явно.
-              if (!LinkKeeper.isRunning)
-                _BackgroundWarning(
-                  title: 'Фоновый режим выключен',
-                  text: LinkKeeper.lastError ??
-                      'Звонки не будут доходить, пока приложение свёрнуто.',
-                  actionLabel: 'Включить',
-                  onAction: _setupBackground,
-                ),
-              // Отдельная беда: сервис работает, но Android через несколько
-              // минут сна отключает приложению сеть. Спасает только белый
-              // список батареи.
-              if (LinkKeeper.isRunning && !LinkKeeper.batteryUnrestricted)
-                _BackgroundWarning(
-                  title: 'Телефон усыпляет приложение',
-                  text: 'Через несколько минут в спящем режиме связь рвётся и '
-                      'звонок не дойдёт. Снимите ограничения батареи.',
-                  actionLabel: 'Настройки',
-                  onAction: LinkKeeper.openBatterySettings,
                 ),
               Expanded(
                 child: link.contacts.isEmpty
@@ -522,7 +539,7 @@ class _ContactRow extends StatelessWidget {
             ),
             alignment: Alignment.center,
             child: Text(
-              peer.substring(0, 1).toUpperCase(),
+              displayName(peer).substring(0, 1).toUpperCase(),
               style: const TextStyle(
                   fontSize: 18, fontWeight: FontWeight.w600, color: textColor),
             ),
@@ -543,7 +560,7 @@ class _ContactRow extends StatelessWidget {
             ),
         ],
       ),
-      title: Text(peer,
+      title: Text(displayName(peer),
           style: TextStyle(
               color: textColor,
               fontWeight: unread ? FontWeight.w700 : FontWeight.w500)),
@@ -588,51 +605,6 @@ class _LinkIndicator extends StatelessWidget {
       width: 9,
       height: 9,
       decoration: BoxDecoration(color: color, shape: BoxShape.circle),
-    );
-  }
-}
-
-class _BackgroundWarning extends StatelessWidget {
-  const _BackgroundWarning({
-    required this.title,
-    required this.text,
-    required this.actionLabel,
-    required this.onAction,
-  });
-
-  final String title;
-  final String text;
-  final String actionLabel;
-  final VoidCallback onAction;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      width: double.infinity,
-      color: const Color(0xFF2A2118),
-      padding: const EdgeInsets.fromLTRB(20, 12, 12, 12),
-      child: Row(
-        children: [
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  title,
-                  style: const TextStyle(
-                      color: amber, fontSize: 13, fontWeight: FontWeight.w600),
-                ),
-                const SizedBox(height: 2),
-                Text(
-                  text,
-                  style: const TextStyle(color: muted, fontSize: 12, height: 1.3),
-                ),
-              ],
-            ),
-          ),
-          TextButton(onPressed: onAction, child: Text(actionLabel)),
-        ],
-      ),
     );
   }
 }
