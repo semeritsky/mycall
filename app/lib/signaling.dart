@@ -63,6 +63,9 @@ class Signaling extends ChangeNotifier {
   /// Разорвать текущее соединение и подключиться заново, не спрашивая
   /// состояния. Единственный способ выйти из залипшего подключения.
   void _forceReconnect() {
+    // Сразу помечаем всё предыдущее устаревшим: закрытие сокета асинхронно, и
+    // его onDone не должен сойти за обрыв нового соединения.
+    _generation++;
     _reconnectTimer?.cancel();
     _heartbeat?.cancel();
     final dying = _socket;
@@ -84,6 +87,15 @@ class Signaling extends ChangeNotifier {
   Timer? _heartbeat;
   int _attempt = 0;
   bool _disposed = false;
+
+  /// Номер текущей попытки подключения.
+  ///
+  /// Попытка может идти секунды, и за это время появиться новая. Без номера
+  /// устаревшая попытка доводила дело до конца и открывала второй сокет, а
+  /// сервер держит одно соединение на человека — телефон выбивал сам себя
+  /// сообщением «вошли с другого телефона». Обработчики брошенного сокета при
+  /// этом продолжали портить состояние живого.
+  int _generation = 0;
 
   /// Когда последний раз что-то пришло от сервера.
   ///
@@ -150,6 +162,7 @@ class Signaling extends ChangeNotifier {
     }
     _reconnectTimer?.cancel();
     _heartbeat?.cancel();
+    final generation = ++_generation;
     state = LinkState.connecting;
     _connectingSince = DateTime.now();
     lastError = null;
@@ -158,18 +171,32 @@ class Signaling extends ChangeNotifier {
     try {
       final socket = await WebSocket.connect('wss://$host/ws')
           .timeout(const Duration(seconds: 12));
+
+      // Пока мы ждали, появилась более свежая попытка — эта уже не нужна.
+      // Закрываем молча: hello отправить не успели, сервер её и не заметит.
+      if (_disposed || generation != _generation) {
+        socket.close().catchError((_) {});
+        return;
+      }
+
       _socket = socket;
       _lastSeen = DateTime.now();
       socket.pingInterval = const Duration(seconds: 20);
       _send({'type': 'hello', 'user': user, 'token': token});
       socket.listen(
-        _onData,
-        onDone: () => _onClosed(socket.closeReason),
-        onError: (Object e) => _onClosed(e.toString()),
+        (data) {
+          if (generation == _generation) _onData(data);
+        },
+        onDone: () {
+          if (generation == _generation) _onClosed(socket.closeReason);
+        },
+        onError: (Object e) {
+          if (generation == _generation) _onClosed(e.toString());
+        },
         cancelOnError: true,
       );
     } catch (e) {
-      _onClosed(_humanError(e));
+      if (generation == _generation) _onClosed(_humanError(e));
     }
   }
 
@@ -341,8 +368,16 @@ class Signaling extends ChangeNotifier {
   /// отсчёт до следующей попытки может тикать ещё полминуты.
   void reconnectNow() {
     if (_disposed) return;
-    // Здоровое соединение не трогаем, всё остальное пересобираем.
+    // Здоровое соединение не трогаем.
     if (state == LinkState.online && _silence < const Duration(seconds: 40)) {
+      return;
+    }
+    // И не мешаем начатой недавно попытке: событие «приложение на экране»
+    // приходит сразу после запуска, когда первое подключение уже идёт.
+    final since = _connectingSince;
+    if (state == LinkState.connecting &&
+        since != null &&
+        DateTime.now().difference(since) < const Duration(seconds: 10)) {
       return;
     }
     _forceReconnect();
