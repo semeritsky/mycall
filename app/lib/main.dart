@@ -50,6 +50,13 @@ class _MyCallAppState extends State<MyCallApp> {
   }
 
   void _openLink(String host, String user, String token) {
+    // Предыдущее соединение обязательно освобождаем. Иначе ссылка на него
+    // теряется, но внутри продолжает работать наблюдатель и переподключаться —
+    // два объекта под одним именем начинают выбивать друг друга, потому что
+    // сервер держит одно соединение на человека. Достаточно дважды нажать
+    // «Подключиться», чтобы получить это навсегда.
+    _signaling?.dispose();
+
     final link = Signaling(host: host, user: user, token: token);
     setState(() => _signaling = link);
     link.connect();
@@ -141,6 +148,7 @@ class _SetupScreenState extends State<SetupScreen> {
   late final TextEditingController _host;
   late String _selected;
   bool _editHost = false;
+  bool _submitted = false;
   String? _error;
 
   @override
@@ -161,12 +169,14 @@ class _SetupScreenState extends State<SetupScreen> {
   }
 
   void _submit() {
+    if (_submitted) return; // второе нажатие открыло бы второе соединение
     final host = _host.text.trim().replaceAll(RegExp(r'^https?://|/$'), '');
     final token = kFamily[_selected];
     if (host.isEmpty || token == null) {
       setState(() => _error = 'Проверьте адрес сервера и выбор человека.');
       return;
     }
+    setState(() => _submitted = true);
     widget.onSubmit(host, _selected, token);
   }
 
@@ -254,7 +264,7 @@ class _SetupScreenState extends State<SetupScreen> {
                 SizedBox(
                   width: double.infinity,
                   child: FilledButton(
-                    onPressed: _submit,
+                    onPressed: _submitted ? null : _submit,
                     style: FilledButton.styleFrom(
                       padding: const EdgeInsets.symmetric(vertical: 16),
                       shape: RoundedRectangleBorder(
