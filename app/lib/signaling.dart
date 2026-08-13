@@ -31,7 +31,48 @@ enum LinkState { offline, connecting, online }
 /// Всё, что касается WebRTC, здесь только пересылается — разбором занимается
 /// [CallSession]. Так сигналинг остаётся заменяемым слоем.
 class Signaling extends ChangeNotifier {
-  Signaling({required this.host, required this.user, required this.token});
+  Signaling({required this.host, required this.user, required this.token}) {
+    // Наблюдатель работает всё время жизни соединения и вытаскивает его из
+    // любого залипания: подвисшая попытка, мёртвый сокет, пропущенный таймер.
+    _watchdog = Timer.periodic(const Duration(seconds: 8), (_) => _check());
+  }
+
+  void _check() {
+    if (_disposed) return;
+    switch (state) {
+      case LinkState.online:
+        // Сервер отвечает на наш ping; тишина дольше минуты означает, что
+        // соединение уже не работает, чем бы оно себя ни считало.
+        if (_silence > const Duration(seconds: 70)) _forceReconnect();
+        break;
+      case LinkState.connecting:
+        final since = _connectingSince;
+        if (since != null &&
+            DateTime.now().difference(since) > const Duration(seconds: 25)) {
+          _forceReconnect();
+        }
+        break;
+      case LinkState.offline:
+        // Отсчёт до следующей попытки потерялся (например, система убила
+        // таймер во сне) — восстанавливаем его.
+        if (_reconnectTimer == null || !_reconnectTimer!.isActive) connect();
+        break;
+    }
+  }
+
+  /// Разорвать текущее соединение и подключиться заново, не спрашивая
+  /// состояния. Единственный способ выйти из залипшего подключения.
+  void _forceReconnect() {
+    _reconnectTimer?.cancel();
+    _heartbeat?.cancel();
+    final dying = _socket;
+    _socket = null;
+    dying?.close().catchError((_) {});
+    state = LinkState.offline;
+    _attempt = 0;
+    notifyListeners();
+    connect();
+  }
 
   final String host; // например call.example.com
   final String user;
@@ -39,8 +80,21 @@ class Signaling extends ChangeNotifier {
 
   WebSocket? _socket;
   Timer? _reconnectTimer;
+  Timer? _watchdog;
+  Timer? _heartbeat;
   int _attempt = 0;
   bool _disposed = false;
+
+  /// Когда последний раз что-то пришло от сервера.
+  ///
+  /// Нужно, чтобы отличить живое соединение от мёртвого. При потере сети без
+  /// разрыва TCP — телефон вышел из зоны, ушёл в сон — сокет остаётся «открытым»
+  /// с точки зрения приложения, и без этой проверки оно так и считает себя
+  /// подключённым, ничего не получая.
+  DateTime _lastSeen = DateTime.now();
+  DateTime? _connectingSince;
+
+  Duration get _silence => DateTime.now().difference(_lastSeen);
 
   LinkState state = LinkState.offline;
   String? lastError;
@@ -84,9 +138,20 @@ class Signaling extends ChangeNotifier {
   Stream<Map<String, dynamic>> get incomingCalls => _incoming.stream;
 
   Future<void> connect() async {
-    if (_disposed || state == LinkState.connecting) return;
+    if (_disposed) return;
+    // Раньше здесь стоял выход, если состояние уже «подключаемся». Из-за этого
+    // подвисшая попытка блокировала все следующие навсегда. Теперь за подвисшие
+    // попытки отвечает наблюдатель, а сюда можно входить свободно.
+    if (state == LinkState.connecting &&
+        _connectingSince != null &&
+        DateTime.now().difference(_connectingSince!) <
+            const Duration(seconds: 25)) {
+      return;
+    }
     _reconnectTimer?.cancel();
+    _heartbeat?.cancel();
     state = LinkState.connecting;
+    _connectingSince = DateTime.now();
     lastError = null;
     notifyListeners();
 
@@ -94,6 +159,7 @@ class Signaling extends ChangeNotifier {
       final socket = await WebSocket.connect('wss://$host/ws')
           .timeout(const Duration(seconds: 12));
       _socket = socket;
+      _lastSeen = DateTime.now();
       socket.pingInterval = const Duration(seconds: 20);
       _send({'type': 'hello', 'user': user, 'token': token});
       socket.listen(
@@ -116,29 +182,46 @@ class Signaling extends ChangeNotifier {
 
   void _onClosed(Object? reason) {
     _socket = null;
+    _heartbeat?.cancel();
+    _connectingSince = null;
     if (_disposed) return;
     state = LinkState.offline;
     online.clear();
-    if (reason != null && reason.toString().isNotEmpty) {
-      lastError = reason.toString().contains('unauthorized')
-          ? 'Сервер не принял токен. Проверьте имя и токен.'
-          : reason.toString();
+    final text = reason?.toString() ?? '';
+    if (text.isNotEmpty) {
+      if (text.contains('unauthorized')) {
+        lastError = 'Сервер не принял токен. Проверьте имя и токен.';
+      } else if (text.contains('replaced by new session')) {
+        // Сервер держит одно соединение на человека: второй вход тем же именем
+        // выкидывает первый, и два телефона начинают выбивать друг друга.
+        lastError = 'Этим же именем вошли с другого телефона.';
+      } else {
+        lastError = text;
+      }
     }
     notifyListeners();
 
     // Экспоненциальная пауза, но не дольше 30 секунд:
     // мобильная сеть может отвалиться на десятки минут.
-    _attempt = (_attempt + 1).clamp(1, 6);
-    final delay = Duration(seconds: [1, 2, 4, 8, 15, 30][_attempt - 1]);
+    _attempt = (_attempt + 1).clamp(1, 5);
+    final delay = Duration(seconds: [1, 2, 4, 8, 15][_attempt - 1]);
     _reconnectTimer = Timer(delay, connect);
   }
 
   void _onData(dynamic raw) {
+    _lastSeen = DateTime.now();
     final msg = jsonDecode(raw as String) as Map<String, dynamic>;
     switch (msg['type']) {
       case 'welcome':
         _attempt = 0;
         state = LinkState.online;
+        _connectingSince = null;
+        // Собственный пульс: сервер отвечает pong, и по нему видно, что канал
+        // действительно живой, а не просто «не закрыт».
+        _heartbeat?.cancel();
+        _heartbeat = Timer.periodic(const Duration(seconds: 25), (_) {
+          _send({'type': 'ping'});
+        });
         contacts = (msg['contacts'] as List).cast<String>();
         online
           ..clear()
@@ -257,10 +340,12 @@ class Signaling extends ChangeNotifier {
   /// Нужно при возврате в приложение: система только что вернула сеть, а наш
   /// отсчёт до следующей попытки может тикать ещё полминуты.
   void reconnectNow() {
-    if (_disposed || state != LinkState.offline) return;
-    _reconnectTimer?.cancel();
-    _attempt = 0;
-    connect();
+    if (_disposed) return;
+    // Здоровое соединение не трогаем, всё остальное пересобираем.
+    if (state == LinkState.online && _silence < const Duration(seconds: 40)) {
+      return;
+    }
+    _forceReconnect();
   }
 
   void ring(String peer, {required bool video}) =>
@@ -277,6 +362,8 @@ class Signaling extends ChangeNotifier {
   @override
   void dispose() {
     _disposed = true;
+    _watchdog?.cancel();
+    _heartbeat?.cancel();
     _reconnectTimer?.cancel();
     _socket?.close();
     _signals.close();
